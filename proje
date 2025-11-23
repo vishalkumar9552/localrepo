@@ -1,0 +1,167 @@
+import streamlit as st
+import pdfplumber
+import os
+import google.generativeai as genai
+
+gemini_api_key = os.getenv("GEMINI_API_KEY")
+if not gemini_api_key:
+    gemini_api_key = st.text_input("Enter your Gemini API Key (required):", type="password")
+
+if gemini_api_key:
+    genai.configure(api_key=gemini_api_key)
+    model = genai.GenerativeModel("gemini-2.5-flash")
+else:
+    st.warning(" Please provide a Gemini API Key to use the app.")
+    st.stop()
+
+
+def extract_text_from_pdf(uploaded_file):
+    text = ""
+    with pdfplumber.open(uploaded_file) as pdf:
+        for page in pdf.pages:
+            text += page.extract_text() or ""
+    return text
+
+
+def ask_gemini(prompt):
+    try:
+        response = model.generate_content(prompt)
+        return response.text.strip() if response and response.text else " No response from Gemini."
+    except Exception as e:
+        return f"⚠️ Error: {e}"
+
+
+def summarize_text(text):
+    prompt = f"Summarize the following text in simple and concise points:\n\n{text}"
+    return ask_gemini(prompt)
+
+
+def generate_mcqs(text, num_questions=5):
+    prompt = f"""
+Generate {num_questions} multiple-choice questions with 4 options each 
+(A, B, C, D) based on the following text. Also, mention the correct answer:
+
+{text}
+"""
+    return ask_gemini(prompt)
+
+
+def generate_brief_questions(text, num_questions=5):
+    prompt = f"""
+Generate {num_questions} short-answer questions (no MCQs) from the following text:
+
+{text}
+"""
+    return ask_gemini(prompt)
+
+
+def grade_solution(assignment_text, solution_text):
+    prompt = f"""
+You are an expert teacher.
+
+Assignment:
+{assignment_text}
+
+Student Solution:
+{solution_text}
+
+Please:
+1. Check how well the solution answers the assignment.
+2. Give a score out of 10.
+3. Give short feedback explaining the score.
+
+Provide your response in the format:
+Score: X/10
+Feedback: ...
+"""
+    return ask_gemini(prompt)
+
+
+st.set_page_config(page_title="AI PDF Assistant (Gemini)", layout="wide")
+st.title(" AI PDF Assistant + Quiz Generator (Gemini AI)")
+
+tab1, tab2, tab3, tab4 = st.tabs([
+    "Teacher: Upload Assignment",
+    "Student: Submit Solution",
+    "Generate Summary & Quiz",
+    "PDF Chatbot"
+])
+
+with tab1:
+    st.header(" Teacher: Upload Assignment")
+    assignment_file = st.file_uploader("Upload Assignment PDF", type=["pdf"], key="teacher_upload")
+    assignment_text = ""
+    if assignment_file:
+        assignment_text = extract_text_from_pdf(assignment_file)
+        if assignment_text.strip() == "":
+            st.error("No readable text found in this PDF.")
+        else:
+            st.success(" Assignment uploaded successfully!")
+            st.subheader("Assignment Preview:")
+            st.write(assignment_text[:1000] + "..." if len(assignment_text) > 1000 else assignment_text)
+
+with tab2:
+    st.header("📝 Student: Submit Solution")
+    solution_file = st.file_uploader("Upload Solution PDF", type=["pdf"], key="student_upload")
+    if solution_file:
+        solution_text = extract_text_from_pdf(solution_file)
+        if solution_text.strip() == "":
+            st.error("No readable text found in this PDF.")
+        else:
+            st.success("✅ Solution uploaded successfully!")
+            if st.button("Check Solution & Score"):
+                if assignment_text.strip() == "":
+                    st.warning("⚠️ Assignment not uploaded yet. Ask your teacher to upload it first.")
+                else:
+                    with st.spinner("AI is grading the solution..."):
+                        result = grade_solution(assignment_text, solution_text)
+                    st.subheader("📊 Result")
+                    st.write(result)
+
+with tab3:
+    st.header(" Generate Summary & Quiz from any PDF or specific section")
+    pdf_file = st.file_uploader("Upload PDF for Summary & Quiz", type=["pdf"], key="quiz_upload")
+    section_text = st.text_area("Optional: Enter specific part of PDF to summarize / generate quiz from", "")
+
+    if pdf_file:
+        pdf_text = extract_text_from_pdf(pdf_file)
+        if pdf_text.strip() == "":
+            st.error("No readable text found in this PDF.")
+        else:
+            st.success(" PDF uploaded successfully!")
+            if st.button("Generate Summary & Quiz"):
+                input_text = section_text.strip() if section_text.strip() else pdf_text
+                with st.spinner("AI is generating summary and quiz..."):
+                    summary = summarize_text(input_text)
+                    mcqs = generate_mcqs(input_text)
+                    brief_qs = generate_brief_questions(input_text)
+                st.subheader(" Summary")
+                st.write(summary)
+                st.subheader(" Multiple Choice Questions")
+                st.write(mcqs)
+                st.subheader(" Brief Questions")
+                st.write(brief_qs)
+
+with tab4:
+    st.header(" PDF Chatbot - Ask anything about your PDF")
+    chatbot_pdf_file = st.file_uploader("Upload PDF for chatbot", type=["pdf"], key="chatbot_upload")
+    user_query = st.text_input("Enter your question or instruction about the PDF", "")
+
+    if chatbot_pdf_file and user_query.strip() != "":
+        chatbot_pdf_text = extract_text_from_pdf(chatbot_pdf_file)
+        if chatbot_pdf_text.strip() == "":
+            st.error("No readable text found in this PDF.")
+        else:
+            prompt = f"""
+You are a helpful AI assistant. The following is the content of a PDF:
+
+{chatbot_pdf_text}
+
+Answer the user's request or question clearly and concisely:
+
+User's request: {user_query}
+"""
+            with st.spinner("AI is generating response..."):
+                response = ask_gemini(prompt)
+            st.subheader("💬 Response")
+            st.write(response)
